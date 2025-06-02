@@ -65,6 +65,7 @@ class FolderUpdate(BaseModel):
 class FolderInfo(BaseModel):
     id: int
     name: str
+    weight: Optional[int] = None
 
 
 class FileInfo(BaseModel):

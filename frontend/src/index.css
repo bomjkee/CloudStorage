@@ -464,11 +464,15 @@ body {
     flex-direction: column;
     line-height: 30px;
   }
+
+  .profile-header {
+    flex-direction: column;
+  }
 }
 
 /* Ховер-эффекты для папок */
 .file-card.folder:hover {
-  background: #f8f9fa;
+  background: #ffffff;
 }
 
 /* Хлебные крошки */
@@ -637,4 +641,118 @@ body {
   font-size: 0.9em;
   margin: -10px 0 10px 0;
   min-height: 18px;
+}
+
+.user-profile-container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.profile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2.5rem;
+}
+
+.profile-title {
+  font-size: 2rem;
+  color: #2d3748;
+  margin: 0;
+}
+
+.back-link {
+  color: #4299e1;
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+
+.back-link:hover {
+  color: #3182ce;
+}
+
+.storage-section {
+  background: #ffffff;
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  margin-bottom: 2rem;
+}
+
+.section-title {
+  font-size: 1.25rem;
+  color: #4a5568;
+  margin: 0 0 1rem 0;
+}
+
+.storage-progress {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 1.5rem;
+}
+
+.storage-value {
+  color: #007bff;
+  font-weight: 600;
+}
+
+.storage-total {
+  color: #718096;
+}
+
+.storage-separator {
+  color: #718096;
+}
+
+.user-details {
+  display: grid;
+  gap: 1.5rem;
+  background: #ffffff;
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.detail-item {
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.detail-label {
+  color: #718096;
+  font-size: 0.875rem;
+  margin: 0 0 0.5rem 0;
+}
+
+.detail-value {
+  color: #2d3748;
+  font-size: 1.125rem;
+  margin: 0;
+}
+
+.admin-panel {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 2px solid #cbd5e0;
+}
+
+.admin-label {
+  color: #007bff;
+  margin: 0 0 0.5rem 0;
+}
+
+.admin-link {
+  color: #007bff;
+  text-decoration: none;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.admin-link:hover {
+  text-decoration: underline;
 }

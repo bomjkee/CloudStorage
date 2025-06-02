@@ -13,9 +13,8 @@ from app.auth.utils_auth import get_password_hash
 from app.auth.config import ACCESS_TOKEN_EXPIRE_MINUTES, STORAGE
 from app.modules.modules import File, Folder, User
 from app.modules.pydanticmodels import FileUpdate, FolderContentResponse, FolderUpdate, NewFolder, Token, UserCreate, UserShow, UserUpdate
-from app.database.database import async_session
 from app.modules.pydanticmodels import User as SUser
-from app.utils.utils import get_files_and_folders
+from app.utils.utils import calculate_folder_weight, delete_parent_weights, get_files_and_folders, update_parent_folders_weight, update_parent_weights
 from app.database.database import getdb
 import os
 
@@ -186,62 +185,67 @@ async def delete_folder(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(getdb)
 ):
-    folder = await db.scalar(
-        select(Folder)
-        .where(
-            Folder.user_id == current_user.id,
-            Folder.id == idfolder
-        )
-    )
-    if not folder:
-        raise HTTPException(404, "Folder not found")
-    all_files = []
-    all_folders = []
-    
-    async def gather_nested(folder_id: int):
-        folders = await db.scalars(
-            select(Folder)
-            .where(Folder.parent_folder_id == folder_id)
-        )
-        for child_folder in folders:
-            all_folders.append(child_folder)
-            await gather_nested(child_folder.id)
-            
-        files = await db.scalars(
-            select(File)
-            .where(File.folderid == folder_id)
-        )
-        all_files.extend(files.all())
-
-    await gather_nested(idfolder)
-    all_folders.append(folder) 
-    
-    total_size = sum(f.weight for f in all_files)
-
-    for file in all_files:
-        try:
-            os.remove(file.path)
-        except Exception as e:
-            raise HTTPException(500, f"Error deleting file {file.path}: {str(e)}")
-        await db.delete(file)
-
-    for folder in all_folders:
-        await db.delete(folder)
-
-    user = await db.get(User, current_user.id)
-    user.storage_used -= total_size
-
-    if folder.parent_folder_id:
-        parent_folder = await db.get(Folder, folder.parent_folder_id)
-        parent_folder.weight -= total_size
-
     try:
+        folder = await db.scalar(
+            select(Folder)
+            .where(
+                Folder.user_id == current_user.id,
+                Folder.id == idfolder
+            )
+            .with_for_update()
+        )
+        if not folder:
+            raise HTTPException(404, "Folder not found")
+
+        all_files = []
+        all_folders = []
+
+        async def gather_nested(folder_id: int):
+            folders = (await db.scalars(
+                select(Folder)
+                .where(Folder.parent_folder_id == folder_id)
+            )).all()
+            
+            for child_folder in folders:
+                all_folders.append(child_folder)
+                await gather_nested(child_folder.id)
+                
+            files = (await db.scalars(
+                select(File)
+                .where(File.folderid == folder_id)
+            )).all()
+            all_files.extend(files)
+
+        await gather_nested(idfolder)
+        all_folders.append(folder)
+        
+        total_size = sum(f.weight for f in all_files)
+
+        for file in all_files:
+            try:
+                if os.path.exists(file.path):
+                    os.remove(file.path)
+            except Exception as e:
+                await db.rollback()
+                raise HTTPException(500, f"Error deleting file {file.path}: {str(e)}")
+            await db.delete(file)
+
+        for f in all_folders:
+            await db.delete(f)
+
+        user = await db.get(User, current_user.id)
+        user.storage_used -= total_size
+
+        if folder.parent_folder_id:
+            await update_parent_folders_weight(db, folder.id, -total_size)
+
         await db.commit()
+        return {"code": 200, "status": "Deleted"}
+
     except Exception as e:
         await db.rollback()
+        logger.error(f"Folder deletion error: {str(e)}")
         raise HTTPException(500, "Deletion failed")
-
-    return {"code": 200, "status": "Deleted"}
 
 
 @app.get("/api/resolve-path/{path:path}")
@@ -319,28 +323,37 @@ async def folder_update(
     update_data: FolderUpdate = Body(...),
     db: AsyncSession = Depends(getdb)
 ):
-    target_folder = await db.scalar(select(Folder).where(
-        Folder.id == idfolder,
-        Folder.user_id == current_user.id
-    ))
+    target_folder = await db.scalar(
+        select(Folder)
+        .where(
+            Folder.id == idfolder,
+            Folder.user_id == current_user.id
+        )
+        .with_for_update()
+    )
 
     if not target_folder:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                            detail="Folder not found")
-    
+        raise HTTPException(404, "Folder not found")
+
+    old_parent_id = target_folder.parent_folder_id
+    old_weight = await calculate_folder_weight(db, target_folder.id)
+
     update_values = update_data.model_dump(exclude_unset=True)
-    
-    new_name = update_values.get('name', target_folder.name)
     new_parent_id = update_values.get('parent_folder_id', target_folder.parent_folder_id)
 
-    if 'parent_folder_id' in update_values:
-        if new_parent_id is not None:
-            new_parent = await db.scalar(select(Folder).where(
-                Folder.id == new_parent_id,
-                Folder.user_id == current_user.id
-            ))
-            if not new_parent:
-                raise HTTPException(status_code=404, detail="New parent folder not found")
+    if new_parent_id is not None:
+        new_parent = await db.scalar(
+            select(Folder)
+            .where(Folder.id == new_parent_id, Folder.user_id == current_user.id)
+        )
+        if not new_parent:
+            raise HTTPException(404, "New parent folder not found")
+        
+        current_parent = new_parent
+        while current_parent:
+            if current_parent.id == target_folder.id:
+                raise HTTPException(400, "Cannot move folder to its own subfolder")
+            current_parent = await db.get(Folder, current_parent.parent_folder_id)
 
     parent_condition = (
         Folder.parent_folder_id == new_parent_id 
@@ -348,18 +361,27 @@ async def folder_update(
         else Folder.parent_folder_id.is_(None)
     )
     
-    existing_folder = await db.scalar(select(Folder).where(
-        Folder.name == new_name,
-        parent_condition,
-        Folder.user_id == current_user.id,
-        Folder.id != target_folder.id
-    ))
+    existing_folder = await db.scalar(
+        select(Folder)
+        .where(
+            Folder.name == update_values.get('name', target_folder.name),
+            parent_condition,
+            Folder.user_id == current_user.id,
+            Folder.id != target_folder.id
+        )
+    )
 
     if existing_folder:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Folder with this name already exists in target directory"
-        )
+        raise HTTPException(400, "Folder with this name already exists in target directory")
+
+    if old_parent_id != new_parent_id:
+        if old_parent_id is not None:
+            await update_parent_folders_weight(db, old_parent_id, -old_weight)
+        
+        if new_parent_id is not None:
+            await update_parent_folders_weight(db, new_parent_id, old_weight)
+        else:
+            target_folder.weight = old_weight
 
     for field, value in update_values.items():
         setattr(target_folder, field, value)
@@ -367,14 +389,15 @@ async def folder_update(
     try:
         await db.commit()
         await db.refresh(target_folder)
+        return target_folder
     except Exception as e:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating folder: {str(e)}"
-        )
-
-    return target_folder
+        if old_parent_id != new_parent_id:
+            if old_parent_id is not None:
+                await update_parent_folders_weight(db, old_parent_id, old_weight)
+            if new_parent_id is not None:
+                await update_parent_folders_weight(db, new_parent_id, -old_weight)
+        raise HTTPException(500, f"Error updating folder: {str(e)}")
 
 
 # Работа с файлами
@@ -419,7 +442,7 @@ async def upload_file(folderid: int,
         
         db.add(new_file)
         user.storage_used += filesize
-        folder.weight += filesize
+        await update_parent_weights(db, folder.id, filesize)
         await db.commit()
         await db.refresh(new_file)
 
@@ -473,7 +496,7 @@ async def delete_file(
     except Exception as e:
         pass
     user.storage_used -= file_exist.weight
-    folder.weight -= file_exist.weight
+    await delete_parent_weights(db, folder.id, file_exist.weight)
     await db.commit()
     await db.refresh(user)
 
@@ -485,15 +508,20 @@ async def file_update(
     update_data: FileUpdate = Body(...),
     db: AsyncSession = Depends(getdb)
 ):
-    target_file = await db.scalar(select(File).where(
-        File.id == file_id,
-        File.ownerid == current_user.id
-    ))
-
+    target_file = await db.scalar(
+        select(File)
+        .where(
+            File.id == file_id,
+            File.ownerid == current_user.id
+        )
+        .with_for_update()
+    )
     if not target_file:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                          detail="File not found")
+        raise HTTPException(status_code=404, detail="File not found")
     
+    old_folder_id = target_file.folderid
+    file_weight = target_file.weight
+
     update_values = update_data.model_dump(exclude_unset=True)
     
     if 'parent_folder_id' in update_values:
@@ -502,33 +530,39 @@ async def file_update(
     new_name = update_values.get('name', target_file.name)
     new_folder_id = update_values.get('folderid', target_file.folderid)
 
-    if 'folderid' in update_data:
-        if new_folder_id is not None:
-            new_folder = await db.scalar(select(Folder).where(
+    if 'folderid' in update_values and new_folder_id is not None:
+        new_folder = await db.scalar(
+            select(Folder)
+            .where(
                 Folder.id == new_folder_id,
                 Folder.user_id == current_user.id
-            ))
-            if not new_folder:
-                raise HTTPException(status_code=404, detail="Target folder not found")
+            )
+        )
+        if not new_folder:
+            raise HTTPException(404, detail="Target folder not found")
 
     folder_condition = (
         File.folderid == new_folder_id 
         if new_folder_id is not None 
-        else File.folderid.is_(None)
-    )
+        else File.folderid.is_(None))
     
-    existing_file = await db.scalar(select(File).where(
-        File.name == new_name,
-        folder_condition,
-        File.ownerid == current_user.id,
-        File.id != target_file.id,
-    ))
-
-    if existing_file:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File with this name already exists in target directory"
+    existing_file = await db.scalar(
+        select(File)
+        .where(
+            File.name == new_name,
+            folder_condition,
+            File.ownerid == current_user.id,
+            File.id != file_id,
         )
+    )
+    if existing_file:
+        raise HTTPException(400, "File with this name already exists in target directory")
+
+    if new_folder_id != old_folder_id:
+        if old_folder_id is not None:
+            await update_parent_folders_weight(db, old_folder_id, -file_weight)
+        if new_folder_id is not None:
+            await update_parent_folders_weight(db, new_folder_id, file_weight)
 
     for field, value in update_values.items():
         setattr(target_file, field, value)
@@ -538,10 +572,7 @@ async def file_update(
         await db.refresh(target_file)
     except Exception as e:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating file: {str(e)}"
-        )
+        raise HTTPException(500, detail=f"Error updating file: {str(e)}")
 
     return target_file
 

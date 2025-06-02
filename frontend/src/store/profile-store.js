@@ -23,7 +23,7 @@ class Profile {
       this.email = response.data.email;
       this.storage_used = response.data.storage_used;
       this.storage_max = response.data.storage_max;
-      this.admin = response.data.admin;
+      this.admin = response.data.is_admin;
     } catch (err) {
       return 0;
     }
