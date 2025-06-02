@@ -4,10 +4,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 import os
+from app.auth.config import DB_USER
 from app.modules.modules import User
 
 
-engine = create_async_engine(url='postgresql+asyncpg://postgres@localhost/CloudStorage' ,echo=True)
+engine = create_async_engine(url=DB_USER ,echo=True)
 async_session = async_sessionmaker(bind=engine)
 
 async def getdb():
