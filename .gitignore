@@ -1,0 +1,16 @@
+.DS_Store
+Thumbs.db
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+backend/.env
+backend/logs/
+backend/storage/
+backend/staticfiles/
+node_modules/
+dist/
+.vite/
+.idea/
+.vscode/
