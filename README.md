@@ -28,7 +28,49 @@ backend/                Django-проект
 frontend/               React + Vite SPA
 ```
 
-## Локальная разработка
+## Быстрый старт через Docker
+
+Самый простой способ поднять всё локально:
+
+```bash
+docker compose up --build
+```
+
+Поднимутся три сервиса:
+- `db` — PostgreSQL 16 на `localhost:5432` (данные в volume `pg_data`).
+- `backend` — Django на `http://localhost:8000` (миграции прогоняются автоматически).
+- `frontend` — Vite dev-сервер на `http://localhost:5173` с проксированием `/api` в backend.
+
+Открой `http://localhost:5173` — приложение готово к работе.
+
+Создание администратора:
+
+```bash
+docker compose exec backend python manage.py shell -c "from cloudstorage.models import User; \
+  from cloudstorage.auth import hash_password; \
+  User.objects.create(username='admin', email='admin@example.com', \
+  password=hash_password('Admin#123'), is_admin=True)"
+```
+
+Остановить контейнеры (данные сохранятся):
+
+```bash
+docker compose down
+```
+
+Удалить вместе с данными:
+
+```bash
+docker compose down -v
+```
+
+Переопределить дефолты можно через `.env` в корне репозитория или переменные окружения на запуск:
+
+```bash
+DJANGO_SECRET_KEY=mysecret JWT_SECRET_KEY=myjwt docker compose up
+```
+
+## Локальная разработка без Docker
 
 ### Бэкенд
 
